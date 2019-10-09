@@ -19,16 +19,19 @@ package org.apache.hadoop.ozone.om;
 import org.apache.hadoop.hdds.conf.OzoneConfiguration;
 import org.apache.hadoop.hdds.scm.container.common.helpers.ExcludeList;
 import org.apache.hadoop.ozone.common.BlockGroup;
+import org.apache.hadoop.ozone.om.exceptions.OMException;
 import org.apache.hadoop.ozone.om.helpers.OmKeyArgs;
 import org.apache.hadoop.ozone.om.helpers.OmKeyInfo;
 import org.apache.hadoop.ozone.om.helpers.OmKeyLocationInfo;
 import org.apache.hadoop.ozone.om.helpers.OmMultipartCommitUploadPartInfo;
 import org.apache.hadoop.ozone.om.helpers.OmMultipartInfo;
 import org.apache.hadoop.ozone.om.helpers.OmMultipartUploadCompleteInfo;
+import org.apache.hadoop.ozone.om.helpers.OmMultipartUploadCompleteList;
 import org.apache.hadoop.ozone.om.helpers.OmMultipartUploadList;
 import org.apache.hadoop.ozone.om.helpers.OmMultipartUploadListParts;
 import org.apache.hadoop.ozone.om.helpers.OpenKeySession;
-import org.apache.hadoop.utils.BackgroundService;
+import org.apache.hadoop.ozone.om.fs.OzoneManagerFS;
+import org.apache.hadoop.hdds.utils.BackgroundService;
 
 import java.io.IOException;
 import java.util.List;
@@ -36,7 +39,7 @@ import java.util.List;
 /**
  * Handles key level commands.
  */
-public interface KeyManager {
+public interface KeyManager extends OzoneManagerFS, IOzoneAcl {
 
   /**
    * Start key manager.
@@ -75,6 +78,7 @@ public interface KeyManager {
    */
   OmKeyLocationInfo allocateBlock(OmKeyArgs args, long clientID,
       ExcludeList excludeList) throws IOException;
+
   /**
    * Given the args of a key to put, write an open key entry to meta data.
    *
@@ -93,10 +97,12 @@ public interface KeyManager {
    * DistributedStorageHandler will use to access the data on datanode.
    *
    * @param args the args of the key provided by client.
+   * @param clientAddress a hint to key manager, order the datanode in returned
+   *                      pipeline by distance between client and datanode.
    * @return a OmKeyInfo instance client uses to talk to container.
    * @throws IOException
    */
-  OmKeyInfo lookupKey(OmKeyArgs args) throws IOException;
+  OmKeyInfo lookupKey(OmKeyArgs args, String clientAddress) throws IOException;
 
   /**
    * Renames an existing key within a bucket.
@@ -216,7 +222,7 @@ public interface KeyManager {
    * @throws IOException
    */
   OmMultipartUploadCompleteInfo completeMultipartUpload(OmKeyArgs omKeyArgs,
-      OmMultipartUploadList multipartUploadList) throws IOException;
+      OmMultipartUploadCompleteList multipartUploadList) throws IOException;
 
   /**
    * Abort multipart upload request.
@@ -225,6 +231,8 @@ public interface KeyManager {
    */
   void abortMultipartUpload(OmKeyArgs omKeyArgs) throws IOException;
 
+  OmMultipartUploadList listMultipartUploads(String volumeName,
+      String bucketName, String prefix) throws OMException;
 
   /**
    * Returns list of parts of a multipart upload key.
@@ -239,5 +247,4 @@ public interface KeyManager {
   OmMultipartUploadListParts listParts(String volumeName, String bucketName,
       String keyName, String uploadID, int partNumberMarker,
       int maxParts)  throws IOException;
-
 }

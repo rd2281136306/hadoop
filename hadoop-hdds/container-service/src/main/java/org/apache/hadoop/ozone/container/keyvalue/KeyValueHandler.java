@@ -18,14 +18,14 @@
 
 package org.apache.hadoop.ozone.container.keyvalue;
 
-import java.io.FileInputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.nio.ByteBuffer;
 import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantLock;
 
 import org.apache.hadoop.conf.Configuration;
@@ -46,6 +46,7 @@ import org.apache.hadoop.hdds.protocol.datanode.proto.ContainerProtos.KeyValue;
 import org.apache.hadoop.hdds.protocol.datanode.proto.ContainerProtos
     .PutSmallFileRequestProto;
 import org.apache.hadoop.hdds.protocol.datanode.proto.ContainerProtos.Type;
+import org.apache.hadoop.hdds.scm.ByteStringHelper;
 import org.apache.hadoop.hdds.scm.ScmConfigKeys;
 import org.apache.hadoop.hdds.scm.container.common.helpers
     .StorageContainerException;
@@ -71,12 +72,10 @@ import org.apache.hadoop.ozone.container.keyvalue.helpers.ChunkUtils;
 import org.apache.hadoop.ozone.container.keyvalue.helpers.BlockUtils;
 import org.apache.hadoop.ozone.container.keyvalue.helpers.KeyValueContainerUtil;
 import org.apache.hadoop.ozone.container.keyvalue.helpers.SmallFileUtils;
-import org.apache.hadoop.ozone.container.keyvalue.impl.ChunkManagerImpl;
+import org.apache.hadoop.ozone.container.keyvalue.impl.ChunkManagerFactory;
 import org.apache.hadoop.ozone.container.keyvalue.impl.BlockManagerImpl;
 import org.apache.hadoop.ozone.container.keyvalue.interfaces.ChunkManager;
 import org.apache.hadoop.ozone.container.keyvalue.interfaces.BlockManager;
-import org.apache.hadoop.ozone.container.keyvalue.statemachine.background
-    .BlockDeletingService;
 import org.apache.hadoop.util.AutoCloseableLock;
 import org.apache.hadoop.util.ReflectionUtils;
 
@@ -85,15 +84,8 @@ import com.google.common.base.Preconditions;
 import org.apache.ratis.thirdparty.com.google.protobuf.ByteString;
 import static org.apache.hadoop.hdds.HddsConfigKeys
     .HDDS_DATANODE_VOLUME_CHOOSING_POLICY;
-import static org.apache.hadoop.hdds.protocol.datanode.proto.ContainerProtos.Result.*;
-import static org.apache.hadoop.ozone.OzoneConfigKeys
-    .OZONE_BLOCK_DELETING_SERVICE_INTERVAL;
-import static org.apache.hadoop.ozone.OzoneConfigKeys
-    .OZONE_BLOCK_DELETING_SERVICE_INTERVAL_DEFAULT;
-import static org.apache.hadoop.ozone.OzoneConfigKeys
-    .OZONE_BLOCK_DELETING_SERVICE_TIMEOUT;
-import static org.apache.hadoop.ozone.OzoneConfigKeys
-    .OZONE_BLOCK_DELETING_SERVICE_TIMEOUT_DEFAULT;
+import static org.apache.hadoop.hdds.protocol.datanode.proto.ContainerProtos.
+    Result.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -108,7 +100,6 @@ public class KeyValueHandler extends Handler {
   private final ContainerType containerType;
   private final BlockManager blockManager;
   private final ChunkManager chunkManager;
-  private final BlockDeletingService blockDeletingService;
   private final VolumeChoosingPolicy volumeChoosingPolicy;
   private final long maxContainerSize;
 
@@ -124,19 +115,7 @@ public class KeyValueHandler extends Handler {
     doSyncWrite =
         conf.getBoolean(OzoneConfigKeys.DFS_CONTAINER_CHUNK_WRITE_SYNC_KEY,
             OzoneConfigKeys.DFS_CONTAINER_CHUNK_WRITE_SYNC_DEFAULT);
-    chunkManager = new ChunkManagerImpl(doSyncWrite);
-    long svcInterval = config
-        .getTimeDuration(OZONE_BLOCK_DELETING_SERVICE_INTERVAL,
-            OZONE_BLOCK_DELETING_SERVICE_INTERVAL_DEFAULT,
-            TimeUnit.MILLISECONDS);
-    long serviceTimeout = config
-        .getTimeDuration(OZONE_BLOCK_DELETING_SERVICE_TIMEOUT,
-            OZONE_BLOCK_DELETING_SERVICE_TIMEOUT_DEFAULT,
-            TimeUnit.MILLISECONDS);
-    this.blockDeletingService =
-        new BlockDeletingService(containerSet, svcInterval, serviceTimeout,
-            TimeUnit.MILLISECONDS, config);
-    blockDeletingService.start();
+    chunkManager = ChunkManagerFactory.getChunkManager(config, doSyncWrite);
     volumeChoosingPolicy = ReflectionUtils.newInstance(conf.getClass(
         HDDS_DATANODE_VOLUME_CHOOSING_POLICY, RoundRobinVolumeChoosingPolicy
             .class, VolumeChoosingPolicy.class), conf);
@@ -146,11 +125,19 @@ public class KeyValueHandler extends Handler {
     // this handler lock is used for synchronizing createContainer Requests,
     // so using a fair lock here.
     containerCreationLock = new AutoCloseableLock(new ReentrantLock(true));
+    boolean isUnsafeByteOperationsEnabled = conf.getBoolean(
+        OzoneConfigKeys.OZONE_UNSAFEBYTEOPERATIONS_ENABLED,
+        OzoneConfigKeys.OZONE_UNSAFEBYTEOPERATIONS_ENABLED_DEFAULT);
+    ByteStringHelper.init(isUnsafeByteOperationsEnabled);
   }
 
   @VisibleForTesting
   public VolumeChoosingPolicy getVolumeChoosingPolicyForTesting() {
     return volumeChoosingPolicy;
+  }
+
+  @Override
+  public void stop() {
   }
 
   @Override
@@ -219,8 +206,10 @@ public class KeyValueHandler extends Handler {
   ContainerCommandResponseProto handleCreateContainer(
       ContainerCommandRequestProto request, KeyValueContainer kvContainer) {
     if (!request.hasCreateContainer()) {
-      LOG.debug("Malformed Create Container request. trace ID: {}",
-          request.getTraceID());
+      if (LOG.isDebugEnabled()) {
+        LOG.debug("Malformed Create Container request. trace ID: {}",
+            request.getTraceID());
+      }
       return ContainerUtils.malformedRequest(request);
     }
     // Create Container request should be passed a null container as the
@@ -246,7 +235,7 @@ public class KeyValueHandler extends Handler {
         // The create container request for an already existing container can
         // arrive in case the ContainerStateMachine reapplies the transaction
         // on datanode restart. Just log a warning msg here.
-        LOG.warn("Container already exists." +
+        LOG.debug("Container already exists." +
             "container Id " + containerID);
       }
     } catch (StorageContainerException ex) {
@@ -282,8 +271,10 @@ public class KeyValueHandler extends Handler {
   ContainerCommandResponseProto handleReadContainer(
       ContainerCommandRequestProto request, KeyValueContainer kvContainer) {
     if (!request.hasReadContainer()) {
-      LOG.debug("Malformed Read Container request. trace ID: {}",
-          request.getTraceID());
+      if (LOG.isDebugEnabled()) {
+        LOG.debug("Malformed Read Container request. trace ID: {}",
+            request.getTraceID());
+      }
       return ContainerUtils.malformedRequest(request);
     }
 
@@ -309,8 +300,10 @@ public class KeyValueHandler extends Handler {
       ContainerCommandRequestProto request, KeyValueContainer kvContainer) {
 
     if (!request.hasUpdateContainer()) {
-      LOG.debug("Malformed Update Container request. trace ID: {}",
-          request.getTraceID());
+      if (LOG.isDebugEnabled()) {
+        LOG.debug("Malformed Update Container request. trace ID: {}",
+            request.getTraceID());
+      }
       return ContainerUtils.malformedRequest(request);
     }
 
@@ -343,8 +336,10 @@ public class KeyValueHandler extends Handler {
       ContainerCommandRequestProto request, KeyValueContainer kvContainer) {
 
     if (!request.hasDeleteContainer()) {
-      LOG.debug("Malformed Delete container request. trace ID: {}",
-          request.getTraceID());
+      if (LOG.isDebugEnabled()) {
+        LOG.debug("Malformed Delete container request. trace ID: {}",
+            request.getTraceID());
+      }
       return ContainerUtils.malformedRequest(request);
     }
 
@@ -365,8 +360,10 @@ public class KeyValueHandler extends Handler {
       ContainerCommandRequestProto request, KeyValueContainer kvContainer) {
 
     if (!request.hasCloseContainer()) {
-      LOG.debug("Malformed Update Container request. trace ID: {}",
-          request.getTraceID());
+      if (LOG.isDebugEnabled()) {
+        LOG.debug("Malformed Update Container request. trace ID: {}",
+            request.getTraceID());
+      }
       return ContainerUtils.malformedRequest(request);
     }
     try {
@@ -392,8 +389,10 @@ public class KeyValueHandler extends Handler {
 
     long blockLength;
     if (!request.hasPutBlock()) {
-      LOG.debug("Malformed Put Key request. trace ID: {}",
-          request.getTraceID());
+      if (LOG.isDebugEnabled()) {
+        LOG.debug("Malformed Put Key request. trace ID: {}",
+            request.getTraceID());
+      }
       return ContainerUtils.malformedRequest(request);
     }
 
@@ -428,8 +427,10 @@ public class KeyValueHandler extends Handler {
       ContainerCommandRequestProto request, KeyValueContainer kvContainer) {
 
     if (!request.hasGetBlock()) {
-      LOG.debug("Malformed Get Key request. trace ID: {}",
-          request.getTraceID());
+      if (LOG.isDebugEnabled()) {
+        LOG.debug("Malformed Get Key request. trace ID: {}",
+            request.getTraceID());
+      }
       return ContainerUtils.malformedRequest(request);
     }
 
@@ -467,8 +468,10 @@ public class KeyValueHandler extends Handler {
   ContainerCommandResponseProto handleGetCommittedBlockLength(
       ContainerCommandRequestProto request, KeyValueContainer kvContainer) {
     if (!request.hasGetCommittedBlockLength()) {
-      LOG.debug("Malformed Get Key request. trace ID: {}",
-          request.getTraceID());
+      if (LOG.isDebugEnabled()) {
+        LOG.debug("Malformed Get Key request. trace ID: {}",
+            request.getTraceID());
+      }
       return ContainerUtils.malformedRequest(request);
     }
 
@@ -503,8 +506,10 @@ public class KeyValueHandler extends Handler {
       ContainerCommandRequestProto request, KeyValueContainer kvContainer) {
 
     if (!request.hasDeleteBlock()) {
-      LOG.debug("Malformed Delete Key request. trace ID: {}",
-          request.getTraceID());
+      if (LOG.isDebugEnabled()) {
+        LOG.debug("Malformed Delete Key request. trace ID: {}",
+            request.getTraceID());
+      }
       return ContainerUtils.malformedRequest(request);
     }
 
@@ -534,8 +539,10 @@ public class KeyValueHandler extends Handler {
       DispatcherContext dispatcherContext) {
 
     if (!request.hasReadChunk()) {
-      LOG.debug("Malformed Read Chunk request. trace ID: {}",
-          request.getTraceID());
+      if (LOG.isDebugEnabled()) {
+        LOG.debug("Malformed Read Chunk request. trace ID: {}",
+            request.getTraceID());
+      }
       return ContainerUtils.malformedRequest(request);
     }
 
@@ -602,8 +609,10 @@ public class KeyValueHandler extends Handler {
       ContainerCommandRequestProto request, KeyValueContainer kvContainer) {
 
     if (!request.hasDeleteChunk()) {
-      LOG.debug("Malformed Delete Chunk request. trace ID: {}",
-          request.getTraceID());
+      if (LOG.isDebugEnabled()) {
+        LOG.debug("Malformed Delete Chunk request. trace ID: {}",
+            request.getTraceID());
+      }
       return ContainerUtils.malformedRequest(request);
     }
 
@@ -645,8 +654,10 @@ public class KeyValueHandler extends Handler {
       DispatcherContext dispatcherContext) {
 
     if (!request.hasWriteChunk()) {
-      LOG.debug("Malformed Write Chunk request. trace ID: {}",
-          request.getTraceID());
+      if (LOG.isDebugEnabled()) {
+        LOG.debug("Malformed Write Chunk request. trace ID: {}",
+            request.getTraceID());
+      }
       return ContainerUtils.malformedRequest(request);
     }
 
@@ -700,8 +711,10 @@ public class KeyValueHandler extends Handler {
       DispatcherContext dispatcherContext) {
 
     if (!request.hasPutSmallFile()) {
-      LOG.debug("Malformed Put Small File request. trace ID: {}",
-          request.getTraceID());
+      if (LOG.isDebugEnabled()) {
+        LOG.debug("Malformed Put Small File request. trace ID: {}",
+            request.getTraceID());
+      }
       return ContainerUtils.malformedRequest(request);
     }
     PutSmallFileRequestProto putSmallFileReq =
@@ -758,8 +771,10 @@ public class KeyValueHandler extends Handler {
       ContainerCommandRequestProto request, KeyValueContainer kvContainer) {
 
     if (!request.hasGetSmallFile()) {
-      LOG.debug("Malformed Get Small File request. trace ID: {}",
-          request.getTraceID());
+      if (LOG.isDebugEnabled()) {
+        LOG.debug("Malformed Get Small File request. trace ID: {}",
+            request.getTraceID());
+      }
       return ContainerUtils.malformedRequest(request);
     }
 
@@ -855,13 +870,14 @@ public class KeyValueHandler extends Handler {
     throw new StorageContainerException(msg, result);
   }
 
-  public Container importContainer(long containerID, long maxSize,
-      String originPipelineId,
-      String originNodeId,
-      FileInputStream rawContainerStream,
-      TarContainerPacker packer)
+  @Override
+  public Container importContainer(final long containerID,
+      final long maxSize, final String originPipelineId,
+      final String originNodeId, final InputStream rawContainerStream,
+      final TarContainerPacker packer)
       throws IOException {
 
+    // TODO: Add layout version!
     KeyValueContainerData containerData =
         new KeyValueContainerData(containerID,
             maxSize, originPipelineId, originNodeId);
@@ -877,54 +893,113 @@ public class KeyValueHandler extends Handler {
   }
 
   @Override
+  public void exportContainer(final Container container,
+      final OutputStream outputStream,
+      final TarContainerPacker packer)
+      throws IOException{
+    container.readLock();
+    try {
+      final KeyValueContainer kvc = (KeyValueContainer) container;
+      kvc.exportContainerData(outputStream, packer);
+    } finally {
+      container.readUnlock();
+    }
+  }
+
+  @Override
   public void markContainerForClose(Container container)
       throws IOException {
-    State currentState = container.getContainerState();
-    // Move the container to CLOSING state only if it's OPEN
-    if (currentState == State.OPEN) {
-      container.markContainerForClose();
-      sendICR(container);
+    container.writeLock();
+    try {
+      // Move the container to CLOSING state only if it's OPEN
+      if (container.getContainerState() == State.OPEN) {
+        container.markContainerForClose();
+        sendICR(container);
+      }
+    } finally {
+      container.writeUnlock();
+    }
+  }
+
+  @Override
+  public void markContainerUnhealthy(Container container)
+      throws IOException {
+    container.writeLock();
+    try {
+      if (container.getContainerState() != State.UNHEALTHY) {
+        try {
+          container.markContainerUnhealthy();
+        } catch (IOException ex) {
+          // explicitly catch IOException here since the this operation
+          // will fail if the Rocksdb metadata is corrupted.
+          long id = container.getContainerData().getContainerID();
+          LOG.warn("Unexpected error while marking container " + id
+              + " as unhealthy", ex);
+        } finally {
+          sendICR(container);
+        }
+      }
+    } finally {
+      container.writeUnlock();
     }
   }
 
   @Override
   public void quasiCloseContainer(Container container)
       throws IOException {
-    final State state = container.getContainerState();
-    // Quasi close call is idempotent.
-    if (state == State.QUASI_CLOSED) {
-      return;
+    container.writeLock();
+    try {
+      final State state = container.getContainerState();
+      // Quasi close call is idempotent.
+      if (state == State.QUASI_CLOSED) {
+        return;
+      }
+      // The container has to be in CLOSING state.
+      if (state != State.CLOSING) {
+        ContainerProtos.Result error =
+            state == State.INVALID ? INVALID_CONTAINER_STATE :
+                CONTAINER_INTERNAL_ERROR;
+        throw new StorageContainerException(
+            "Cannot quasi close container #" + container.getContainerData()
+                .getContainerID() + " while in " + state + " state.", error);
+      }
+      container.quasiClose();
+      sendICR(container);
+    } finally {
+      container.writeUnlock();
     }
-    // The container has to be in CLOSING state.
-    if (state != State.CLOSING) {
-      ContainerProtos.Result error = state == State.INVALID ?
-          INVALID_CONTAINER_STATE : CONTAINER_INTERNAL_ERROR;
-      throw new StorageContainerException("Cannot quasi close container #" +
-          container.getContainerData().getContainerID() + " while in " +
-          state + " state.", error);
-    }
-    container.quasiClose();
-    sendICR(container);
   }
 
   @Override
   public void closeContainer(Container container)
       throws IOException {
-    final State state = container.getContainerState();
-    // Close call is idempotent.
-    if (state == State.CLOSED) {
-      return;
+    container.writeLock();
+    try {
+      final State state = container.getContainerState();
+      // Close call is idempotent.
+      if (state == State.CLOSED) {
+        return;
+      }
+      if (state == State.UNHEALTHY) {
+        throw new StorageContainerException(
+            "Cannot close container #" + container.getContainerData()
+                .getContainerID() + " while in " + state + " state.",
+            ContainerProtos.Result.CONTAINER_UNHEALTHY);
+      }
+      // The container has to be either in CLOSING or in QUASI_CLOSED state.
+      if (state != State.CLOSING && state != State.QUASI_CLOSED) {
+        ContainerProtos.Result error =
+            state == State.INVALID ? INVALID_CONTAINER_STATE :
+                CONTAINER_INTERNAL_ERROR;
+        throw new StorageContainerException(
+            "Cannot close container #" + container.getContainerData()
+                .getContainerID() + " while in " + state + " state.", error);
+      }
+      container.close();
+      sendICR(container);
+    } finally {
+      container.writeUnlock();
     }
-    // The container has to be either in CLOSING or in QUASI_CLOSED state.
-    if (state != State.CLOSING && state != State.QUASI_CLOSED) {
-      ContainerProtos.Result error = state == State.INVALID ?
-          INVALID_CONTAINER_STATE : CONTAINER_INTERNAL_ERROR;
-      throw new StorageContainerException("Cannot close container #" +
-          container.getContainerData().getContainerID() + " while in " +
-          state + " state.", error);
-    }
-    container.close();
-    sendICR(container);
   }
 
   @Override

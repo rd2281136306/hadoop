@@ -87,10 +87,11 @@ public class ChunkManagerImpl implements ChunkManager {
       boolean isOverwrite = ChunkUtils.validateChunkForOverwrite(
           chunkFile, info);
       File tmpChunkFile = getTmpChunkFile(chunkFile, dispatcherContext);
-
-      LOG.debug(
-          "writing chunk:{} chunk stage:{} chunk file:{} tmp chunk file:{}",
-          info.getChunkName(), stage, chunkFile, tmpChunkFile);
+      if (LOG.isDebugEnabled()) {
+        LOG.debug(
+            "writing chunk:{} chunk stage:{} chunk file:{} tmp chunk file:{}",
+            info.getChunkName(), stage, chunkFile, tmpChunkFile);
+      }
 
       switch (stage) {
       case WRITE_DATA:
@@ -142,18 +143,12 @@ public class ChunkManagerImpl implements ChunkManager {
         // the same term and log index appended as the current transaction
         commitChunk(tmpChunkFile, chunkFile);
         // Increment container stats here, as we commit the data.
-        containerData.incrBytesUsed(info.getLen());
-        containerData.incrWriteCount();
-        containerData.incrWriteBytes(info.getLen());
+        updateContainerWriteStats(container, info, isOverwrite);
         break;
       case COMBINED:
         // directly write to the chunk file
         ChunkUtils.writeData(chunkFile, info, data, volumeIOStats, doSyncWrite);
-        if (!isOverwrite) {
-          containerData.incrBytesUsed(info.getLen());
-        }
-        containerData.incrWriteCount();
-        containerData.incrWriteBytes(info.getLen());
+        updateContainerWriteStats(container, info, isOverwrite);
         break;
       default:
         throw new IOException("Can not identify write operation.");
@@ -174,6 +169,18 @@ public class ChunkManagerImpl implements ChunkManager {
       throw new StorageContainerException("Internal error: ", e,
           CONTAINER_INTERNAL_ERROR);
     }
+  }
+
+  protected void updateContainerWriteStats(Container container, ChunkInfo info,
+      boolean isOverwrite) {
+    KeyValueContainerData containerData = (KeyValueContainerData) container
+        .getContainerData();
+
+    if (!isOverwrite) {
+      containerData.incrBytesUsed(info.getLen());
+    }
+    containerData.incrWriteCount();
+    containerData.incrWriteBytes(info.getLen());
   }
 
   /**
@@ -207,7 +214,8 @@ public class ChunkManagerImpl implements ChunkManager {
 
         // In case the chunk file does not exist but tmp chunk file exist,
         // read from tmp chunk file if readFromTmpFile is set to true
-        if (!chunkFile.exists() && dispatcherContext.isReadFromTmpFile()) {
+        if (!chunkFile.exists() && dispatcherContext != null
+            && dispatcherContext.isReadFromTmpFile()) {
           chunkFile = getTmpChunkFile(chunkFile, dispatcherContext);
         }
         data = ChunkUtils.readData(chunkFile, info, volumeIOStats);

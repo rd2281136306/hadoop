@@ -18,6 +18,7 @@
 package org.apache.hadoop.ozone;
 
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.conf.StorageUnit;
 import org.apache.hadoop.hdds.conf.OzoneConfiguration;
 import org.apache.hadoop.hdds.protocol.DatanodeDetails;
 import org.apache.hadoop.hdds.scm.server.StorageContainerManager;
@@ -88,12 +89,19 @@ public interface MiniOzoneCluster {
   void setWaitForClusterToBeReadyTimeout(int timeoutInMs);
 
   /**
-   * Waits/blocks till the cluster is out of chill mode.
+   * Waits/blocks till the cluster is out of safe mode.
    *
    * @throws TimeoutException TimeoutException In case of timeout
    * @throws InterruptedException In case of interrupt while waiting
    */
-  void waitTobeOutOfChillMode() throws TimeoutException, InterruptedException;
+  void waitTobeOutOfSafeMode() throws TimeoutException, InterruptedException;
+
+  /**
+   * Returns OzoneManager Service ID.
+   *
+   * @return Service ID String
+   */
+  String getServiceId();
 
   /**
    * Returns {@link StorageContainerManager} associated with this
@@ -137,15 +145,6 @@ public interface MiniOzoneCluster {
   OzoneClient getRpcClient() throws IOException;
 
   /**
-   * Returns an REST based {@link OzoneClient} to access the
-   * {@link MiniOzoneCluster}.
-   *
-   * @return {@link OzoneClient}
-   * @throws IOException
-   */
-  OzoneClient getRestClient() throws IOException;
-
-  /**
    * Returns StorageContainerLocationClient to communicate with
    * {@link StorageContainerManager} associated with the MiniOzoneCluster.
    *
@@ -158,12 +157,14 @@ public interface MiniOzoneCluster {
   /**
    * Restarts StorageContainerManager instance.
    *
+   * @param waitForDatanode
    * @throws IOException
    * @throws TimeoutException
    * @throws InterruptedException
    */
-  void restartStorageContainerManager() throws InterruptedException,
-      TimeoutException, IOException, AuthenticationException;
+  void restartStorageContainerManager(boolean waitForDatanode)
+      throws InterruptedException, TimeoutException, IOException,
+      AuthenticationException;
 
   /**
    * Restarts OzoneManager instance.
@@ -179,6 +180,8 @@ public interface MiniOzoneCluster {
    */
   void restartHddsDatanode(int i, boolean waitForDatanode)
       throws InterruptedException, TimeoutException;
+
+  int getHddsDatanodeIndex(DatanodeDetails dn) throws IOException;
 
   /**
    * Restart a particular HddsDatanode.
@@ -222,6 +225,11 @@ public interface MiniOzoneCluster {
   void startHddsDatanodes();
 
   /**
+   * Shuts down all the DataNodes.
+   */
+  void shutdownHddsDatanodes();
+
+  /**
    * Builder class for MiniOzoneCluster.
    */
   @SuppressWarnings("visibilitymodifier")
@@ -229,13 +237,15 @@ public interface MiniOzoneCluster {
 
     protected static final int DEFAULT_HB_INTERVAL_MS = 1000;
     protected static final int DEFAULT_HB_PROCESSOR_INTERVAL_MS = 100;
+    protected static final int ACTIVE_OMS_NOT_SET = -1;
 
     protected final OzoneConfiguration conf;
-    protected final String path;
+    protected String path;
 
     protected String clusterId;
     protected String omServiceId;
     protected int numOfOMs;
+    protected int numOfActiveOMs = ACTIVE_OMS_NOT_SET;
 
     protected Optional<Boolean> enableTrace = Optional.of(false);
     protected Optional<Integer> hbInterval = Optional.empty();
@@ -249,6 +259,7 @@ public interface MiniOzoneCluster {
     protected Optional<Long> streamBufferFlushSize = Optional.empty();
     protected Optional<Long> streamBufferMaxSize = Optional.empty();
     protected Optional<Long> blockSize = Optional.empty();
+    protected Optional<StorageUnit> streamBufferSizeUnit = Optional.empty();
     // Use relative smaller number of handlers for testing
     protected int numOfOmHandlers = 20;
     protected int numOfScmHandlers = 20;
@@ -258,9 +269,7 @@ public interface MiniOzoneCluster {
 
     protected Builder(OzoneConfiguration conf) {
       this.conf = conf;
-      this.clusterId = UUID.randomUUID().toString();
-      this.path = GenericTestUtils.getTempPath(
-          MiniOzoneClusterImpl.class.getSimpleName() + "-" + clusterId);
+      setClusterId(UUID.randomUUID().toString());
     }
 
     /**
@@ -272,6 +281,8 @@ public interface MiniOzoneCluster {
      */
     public Builder setClusterId(String id) {
       clusterId = id;
+      path = GenericTestUtils.getTempPath(
+          MiniOzoneClusterImpl.class.getSimpleName() + "-" + clusterId);
       return this;
     }
 
@@ -431,6 +442,16 @@ public interface MiniOzoneCluster {
 
     public Builder setNumOfOzoneManagers(int numOMs) {
       this.numOfOMs = numOMs;
+      return this;
+    }
+
+    public Builder setNumOfActiveOMs(int numActiveOMs) {
+      this.numOfActiveOMs = numActiveOMs;
+      return this;
+    }
+
+    public Builder setStreamBufferSizeUnit(StorageUnit unit) {
+      this.streamBufferSizeUnit = Optional.of(unit);
       return this;
     }
 

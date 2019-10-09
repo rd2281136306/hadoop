@@ -22,6 +22,7 @@ import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.List;
+import java.util.UUID;
 
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
@@ -111,9 +112,11 @@ public abstract class AbstractContractGetFileStatusTest extends
   private void listFilesOnEmptyDir(boolean recursive) throws IOException {
     describe("Invoke listFiles(recursive=" + recursive + ")" +
         " on empty directories, expect nothing found");
-    Path subfolder = createDirWithEmptySubFolder();
     FileSystem fs = getFileSystem();
-    new TreeScanResults(fs.listFiles(getContract().getTestPath(), recursive))
+    Path path = getContract().getTestPath();
+    fs.delete(path, true);
+    Path subfolder = createDirWithEmptySubFolder();
+    new TreeScanResults(fs.listFiles(path, recursive))
         .assertSizeEquals("listFiles(test dir, " + recursive + ")", 0, 0, 0);
     describe("Test on empty subdirectory");
     new TreeScanResults(fs.listFiles(subfolder, recursive))
@@ -125,9 +128,11 @@ public abstract class AbstractContractGetFileStatusTest extends
   public void testListLocatedStatusEmptyDirectory() throws IOException {
     describe("Invoke listLocatedStatus() on empty directories;" +
         " expect directories to be found");
-    Path subfolder = createDirWithEmptySubFolder();
     FileSystem fs = getFileSystem();
-    new TreeScanResults(fs.listLocatedStatus(getContract().getTestPath()))
+    Path path = getContract().getTestPath();
+    fs.delete(path, true);
+    Path subfolder = createDirWithEmptySubFolder();
+    new TreeScanResults(fs.listLocatedStatus(path))
       .assertSizeEquals("listLocatedStatus(test dir)", 0, 1, 0);
     describe("Test on empty subdirectory");
     new TreeScanResults(fs.listLocatedStatus(subfolder))
@@ -395,7 +400,8 @@ public abstract class AbstractContractGetFileStatusTest extends
     Path path = getContract().getTestPath();
     fs.delete(path, true);
     // create a - non-qualified - Path for a subdir
-    Path subfolder = path.suffix('/' + this.methodName.getMethodName());
+    Path subfolder = path.suffix('/' + this.methodName.getMethodName()
+        + "-" + UUID.randomUUID());
     mkdirs(subfolder);
     return subfolder;
   }

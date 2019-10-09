@@ -32,6 +32,7 @@ import java.util.Set;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.io.DataOutputBuffer;
 import org.apache.hadoop.test.GenericTestUtils;
+import org.apache.hadoop.metrics2.lib.DefaultMetricsSystem;
 import org.apache.hadoop.security.Credentials;
 import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.hadoop.security.token.Token;
@@ -100,6 +101,7 @@ import org.apache.hadoop.yarn.server.resourcemanager.rmnode.RMNodeEventType;
 import org.apache.hadoop.yarn.server.resourcemanager.rmnode.RMNodeImpl;
 import org.apache.hadoop.yarn.server.resourcemanager.rmnode.RMNodeStartedEvent;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.AbstractYarnScheduler;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.QueueMetrics;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.SchedulerApplication;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.SchedulerApplicationAttempt;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.SchedulerNode;
@@ -156,6 +158,9 @@ public class MockRM extends ResourceManager {
   public MockRM(Configuration conf, RMStateStore store,
       boolean useNullRMNodeLabelsManager, boolean useRealElector) {
     super();
+    // Clear metrics to avoid possible interference between tests
+    DefaultMetricsSystem.shutdown();
+    QueueMetrics.clearQueueMetrics();
     if (conf.getBoolean(TestResourceProfiles.TEST_CONF_RESET_RESOURCE_TYPES,
         true)) {
       ResourceUtils.resetResourceTypes(conf);
@@ -523,14 +528,21 @@ public class MockRM extends ResourceManager {
 
   public RMApp submitApp(int masterMemory, Set<String> appTags)
       throws Exception {
+    return submitApp(masterMemory, null, false, null, Priority.newInstance(0),
+        appTags);
+  }
+
+  public RMApp submitApp(int masterMemory, String queue,
+      boolean isAppIdProvided, ApplicationId appId, Priority priority,
+      Set<String> appTags) throws Exception {
     Resource resource = Resource.newInstance(masterMemory, 0);
     ResourceRequest amResourceRequest = ResourceRequest.newInstance(
         Priority.newInstance(0), ResourceRequest.ANY, resource, 1);
     return submitApp(Collections.singletonList(amResourceRequest), "",
         UserGroupInformation.getCurrentUser().getShortUserName(), null, false,
-        null, super.getConfig().getInt(YarnConfiguration.RM_AM_MAX_ATTEMPTS,
+        queue, super.getConfig().getInt(YarnConfiguration.RM_AM_MAX_ATTEMPTS,
         YarnConfiguration.DEFAULT_RM_AM_MAX_ATTEMPTS), null, null, true,
-        false, false, null, 0, null, true, Priority.newInstance(0), null,
+        false, isAppIdProvided, appId, 0, null, true, priority, null,
         null, null, appTags);
   }
 

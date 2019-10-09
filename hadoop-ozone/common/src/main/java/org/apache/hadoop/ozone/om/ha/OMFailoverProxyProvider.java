@@ -21,6 +21,7 @@ package org.apache.hadoop.ozone.om.ha;
 import com.google.common.annotations.VisibleForTesting;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdds.conf.OzoneConfiguration;
+import org.apache.hadoop.io.Text;
 import org.apache.hadoop.io.retry.FailoverProxyProvider;
 import org.apache.hadoop.ipc.Client;
 import org.apache.hadoop.ipc.ProtobufRpcEngine;
@@ -38,12 +39,12 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
 import static org.apache.hadoop.ozone.om.OMConfigKeys.OZONE_OM_ADDRESS_KEY;
-import static org.apache.hadoop.ozone.om.OMConfigKeys.OZONE_OM_SERVICE_IDS_KEY;
 
 /**
  * A failover proxy provider implementation which allows clients to configure
@@ -57,7 +58,8 @@ public class OMFailoverProxyProvider implements
       LoggerFactory.getLogger(OMFailoverProxyProvider.class);
 
   // Map of OMNodeID to its proxy
-  private Map<String, OMProxyInfo> omProxies;
+  private Map<String, ProxyInfo<OzoneManagerProtocolPB>> omProxies;
+  private Map<String, OMProxyInfo> omProxyInfos;
   private List<String> omNodeIDList;
 
   private String currentProxyOMNodeId;
@@ -66,48 +68,35 @@ public class OMFailoverProxyProvider implements
   private final Configuration conf;
   private final long omVersion;
   private final UserGroupInformation ugi;
+  private final Text delegationTokenService;
+
+  private final String omServiceId;
 
   public OMFailoverProxyProvider(OzoneConfiguration configuration,
-      UserGroupInformation ugi) throws IOException {
+      UserGroupInformation ugi, String omServiceId) throws IOException {
     this.conf = configuration;
     this.omVersion = RPC.getProtocolVersion(OzoneManagerProtocolPB.class);
     this.ugi = ugi;
-    loadOMClientConfigs(conf);
+    this.omServiceId = omServiceId;
+    loadOMClientConfigs(conf, this.omServiceId);
+    this.delegationTokenService = computeDelegationTokenService();
 
     currentProxyIndex = 0;
     currentProxyOMNodeId = omNodeIDList.get(currentProxyIndex);
   }
 
-  /**
-   * Class to store proxy information.
-   */
-  public final class OMProxyInfo
-      extends FailoverProxyProvider.ProxyInfo<OzoneManagerProtocolPB> {
-    private InetSocketAddress address;
-
-    OMProxyInfo(OzoneManagerProtocolPB proxy, String proxyInfoStr,
-        InetSocketAddress addr) {
-      super(proxy, proxyInfoStr);
-      this.address = addr;
-    }
-
-    public InetSocketAddress getAddress() {
-      return address;
-    }
+  public OMFailoverProxyProvider(OzoneConfiguration configuration,
+      UserGroupInformation ugi) throws IOException {
+    this(configuration, ugi, null);
   }
 
-  private void loadOMClientConfigs(Configuration config) throws IOException {
+  private void loadOMClientConfigs(Configuration config, String omSvcId)
+      throws IOException {
     this.omProxies = new HashMap<>();
+    this.omProxyInfos = new HashMap<>();
     this.omNodeIDList = new ArrayList<>();
 
-    Collection<String> omServiceIds = config.getTrimmedStringCollection(
-        OZONE_OM_SERVICE_IDS_KEY);
-
-    if (omServiceIds.size() > 1) {
-      throw new IllegalArgumentException("Multi-OM Services is not supported." +
-          " Please configure only one OM Service ID in " +
-          OZONE_OM_SERVICE_IDS_KEY);
-    }
+    Collection<String> omServiceIds = Collections.singletonList(omSvcId);
 
     for (String serviceId : OmUtils.emptyAsSingletonNull(omServiceIds)) {
       Collection<String> omNodeIds = OmUtils.getOMNodeIds(config, serviceId);
@@ -121,24 +110,21 @@ public class OMFailoverProxyProvider implements
           continue;
         }
 
-        InetSocketAddress addr = NetUtils.createSocketAddr(rpcAddrStr);
+        OMProxyInfo omProxyInfo = new OMProxyInfo(nodeId, rpcAddrStr);
 
-        // Add the OM client proxy info to list of proxies
-        if (addr != null) {
-          StringBuilder proxyInfo = new StringBuilder()
-              .append(nodeId).append("(")
-              .append(NetUtils.getHostPortString(addr)).append(")");
-          OMProxyInfo omProxyInfo = new OMProxyInfo(null,
-              proxyInfo.toString(), addr);
+        if (omProxyInfo.getAddress() != null) {
+
+          ProxyInfo<OzoneManagerProtocolPB> proxyInfo =
+              new ProxyInfo(null, omProxyInfo.toString());
 
           // For a non-HA OM setup, nodeId might be null. If so, we assign it
           // a dummy value
           if (nodeId == null) {
             nodeId = OzoneConsts.OM_NODE_ID_DUMMY;
           }
-          omProxies.put(nodeId, omProxyInfo);
+          omProxies.put(nodeId, proxyInfo);
+          omProxyInfos.put(nodeId, omProxyInfo);
           omNodeIDList.add(nodeId);
-
         } else {
           LOG.error("Failed to create OM proxy for {} at address {}",
               nodeId, rpcAddrStr);
@@ -173,27 +159,53 @@ public class OMFailoverProxyProvider implements
    * @return the OM proxy object to invoke methods upon
    */
   @Override
-  public synchronized OMProxyInfo getProxy() {
-    OMProxyInfo currentOMProxyInfo = omProxies.get(currentProxyOMNodeId);
-    createOMProxyIfNeeded(currentOMProxyInfo);
-    return currentOMProxyInfo;
+  public synchronized ProxyInfo getProxy() {
+    ProxyInfo currentProxyInfo = omProxies.get(currentProxyOMNodeId);
+    createOMProxyIfNeeded(currentProxyInfo, currentProxyOMNodeId);
+    return currentProxyInfo;
   }
 
   /**
-   * Creates OM proxy object if it does not already exist.
+   * Creates proxy object if it does not already exist.
    */
-  private OMProxyInfo createOMProxyIfNeeded(OMProxyInfo proxyInfo) {
+  private void createOMProxyIfNeeded(ProxyInfo proxyInfo,
+      String nodeId) {
     if (proxyInfo.proxy == null) {
+      InetSocketAddress address = omProxyInfos.get(nodeId).getAddress();
       try {
-        proxyInfo.proxy = createOMProxy(proxyInfo.address);
+        proxyInfo.proxy = createOMProxy(address);
       } catch (IOException ioe) {
         LOG.error("{} Failed to create RPC proxy to OM at {}",
-            this.getClass().getSimpleName(), proxyInfo.address, ioe);
+            this.getClass().getSimpleName(), address, ioe);
         throw new RuntimeException(ioe);
       }
     }
-    return proxyInfo;
   }
+
+  public Text getCurrentProxyDelegationToken() {
+    return delegationTokenService;
+  }
+
+  private Text computeDelegationTokenService() {
+    // For HA, this will return "," separated address of all OM's.
+    StringBuilder rpcAddress = new StringBuilder();
+    int count = 0;
+    for (Map.Entry<String, OMProxyInfo> omProxyInfoSet :
+        omProxyInfos.entrySet()) {
+      count++;
+      rpcAddress =
+          rpcAddress.append(
+              omProxyInfoSet.getValue().getDelegationTokenService());
+
+      if (omProxyInfos.size() != count) {
+        rpcAddress.append(",");
+      }
+    }
+
+    return new Text(rpcAddress.toString());
+  }
+
+
 
   /**
    * Called whenever an error warrants failing over. It is determined by the
@@ -259,7 +271,7 @@ public class OMFailoverProxyProvider implements
    */
   @Override
   public synchronized void close() throws IOException {
-    for (OMProxyInfo proxy : omProxies.values()) {
+    for (ProxyInfo<OzoneManagerProtocolPB> proxy : omProxies.values()) {
       OzoneManagerProtocolPB omProxy = proxy.proxy;
       if (omProxy != null) {
         RPC.stopProxy(omProxy);
@@ -268,8 +280,13 @@ public class OMFailoverProxyProvider implements
   }
 
   @VisibleForTesting
-  public List<OMProxyInfo> getOMProxies() {
-    return new ArrayList<>(omProxies.values());
+  public List<ProxyInfo> getOMProxies() {
+    return new ArrayList<ProxyInfo>(omProxies.values());
+  }
+
+  @VisibleForTesting
+  public List<OMProxyInfo> getOMProxyInfos() {
+    return new ArrayList<OMProxyInfo>(omProxyInfos.values());
   }
 }
 

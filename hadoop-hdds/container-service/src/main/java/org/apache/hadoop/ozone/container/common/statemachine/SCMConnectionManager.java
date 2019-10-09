@@ -18,6 +18,8 @@ package org.apache.hadoop.ozone.container.common.statemachine;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.io.IOUtils;
+import org.apache.hadoop.io.retry.RetryPolicies;
+import org.apache.hadoop.io.retry.RetryPolicy;
 import org.apache.hadoop.ipc.ProtobufRpcEngine;
 import org.apache.hadoop.ipc.RPC;
 import org.apache.hadoop.metrics2.util.MBeans;
@@ -35,13 +37,14 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
+import static java.util.Collections.unmodifiableList;
 import static org.apache.hadoop.hdds.scm.HddsServerUtil
     .getScmRpcTimeOutInMilliseconds;
 
@@ -139,10 +142,14 @@ public class SCMConnectionManager
       long version =
           RPC.getProtocolVersion(StorageContainerDatanodeProtocolPB.class);
 
-      StorageContainerDatanodeProtocolPB rpcProxy = RPC.getProxy(
+      RetryPolicy retryPolicy =
+          RetryPolicies.retryForeverWithFixedSleep(
+              1000, TimeUnit.MILLISECONDS);
+      StorageContainerDatanodeProtocolPB rpcProxy = RPC.getProtocolProxy(
           StorageContainerDatanodeProtocolPB.class, version,
           address, UserGroupInformation.getCurrentUser(), conf,
-          NetUtils.getDefaultSocketFactory(conf), getRpcTimeout());
+          NetUtils.getDefaultSocketFactory(conf), getRpcTimeout(),
+          retryPolicy).getProxy();
 
       StorageContainerDatanodeProtocolClientSideTranslatorPB rpcClient =
           new StorageContainerDatanodeProtocolClientSideTranslatorPB(rpcProxy);
@@ -184,7 +191,12 @@ public class SCMConnectionManager
    * @return - List of RPC Endpoints.
    */
   public Collection<EndpointStateMachine> getValues() {
-    return scmMachines.values();
+    readLock();
+    try {
+      return unmodifiableList(new ArrayList<>(scmMachines.values()));
+    } finally {
+      readUnlock();
+    }
   }
 
   @Override
@@ -201,9 +213,7 @@ public class SCMConnectionManager
   public List<EndpointStateMachineMBean> getSCMServers() {
     readLock();
     try {
-      return Collections
-          .unmodifiableList(new ArrayList<>(scmMachines.values()));
-
+      return unmodifiableList(new ArrayList<>(scmMachines.values()));
     } finally {
       readUnlock();
     }

@@ -54,7 +54,7 @@ public class ContainerInfo implements Comparator<ContainerInfo>,
     mapper.setVisibility(PropertyAccessor.FIELD, JsonAutoDetect.Visibility.ANY);
     mapper
         .setVisibility(PropertyAccessor.GETTER, JsonAutoDetect.Visibility.NONE);
-    WRITER = mapper.writer();
+    WRITER = mapper.writerWithDefaultPrettyPrinter();
   }
 
   private HddsProtos.LifeCycleState state;
@@ -108,13 +108,6 @@ public class ContainerInfo implements Comparator<ContainerInfo>,
     this.replicationType = repType;
   }
 
-  public ContainerInfo(ContainerInfo info) {
-    this(info.getContainerID(), info.getState(), info.getPipelineID(),
-        info.getUsedBytes(), info.getNumberOfKeys(),
-        info.getStateEnterTime(), info.getOwner(),
-        info.getDeleteTransactionId(), info.getSequenceId(),
-        info.getReplicationFactor(), info.getReplicationType());
-  }
   /**
    * Needed for serialization findbugs.
    */
@@ -474,4 +467,5 @@ public class ContainerInfo implements Comparator<ContainerInfo>,
     return state == HddsProtos.LifeCycleState.OPEN
         || state == HddsProtos.LifeCycleState.CLOSING;
   }
+
 }

@@ -16,7 +16,7 @@
  */
 package org.apache.hadoop.hdds;
 
-import org.apache.hadoop.utils.db.DBProfile;
+import org.apache.hadoop.hdds.utils.db.DBProfile;
 
 /**
  * This class contains constants for configuration keys and default values
@@ -63,47 +63,44 @@ public final class HddsConfigKeys {
   public static final String HDDS_CONTAINER_CLOSE_THRESHOLD =
       "hdds.container.close.threshold";
   public static final float HDDS_CONTAINER_CLOSE_THRESHOLD_DEFAULT = 0.9f;
-  public static final String HDDS_SCM_CHILLMODE_ENABLED =
-      "hdds.scm.chillmode.enabled";
-  public static final String HDDS_CONTAINERSCRUB_ENABLED =
-      "hdds.containerscrub.enabled";
-  public static final boolean HDDS_CONTAINERSCRUB_ENABLED_DEFAULT = false;
-  public static final boolean HDDS_SCM_CHILLMODE_ENABLED_DEFAULT = true;
-  public static final String HDDS_SCM_CHILLMODE_MIN_DATANODE =
-      "hdds.scm.chillmode.min.datanode";
-  public static final int HDDS_SCM_CHILLMODE_MIN_DATANODE_DEFAULT = 1;
+  public static final String HDDS_SCM_SAFEMODE_ENABLED =
+      "hdds.scm.safemode.enabled";
 
+  public static final boolean HDDS_SCM_SAFEMODE_ENABLED_DEFAULT = true;
+  public static final String HDDS_SCM_SAFEMODE_MIN_DATANODE =
+      "hdds.scm.safemode.min.datanode";
+  public static final int HDDS_SCM_SAFEMODE_MIN_DATANODE_DEFAULT = 1;
 
   public static final String
-      HDDS_SCM_WAIT_TIME_AFTER_CHILL_MODE_EXIT =
-      "hdds.scm.wait.time.after.chillmode.exit";
+      HDDS_SCM_WAIT_TIME_AFTER_SAFE_MODE_EXIT =
+      "hdds.scm.wait.time.after.safemode.exit";
 
   public static final String
-      HDDS_SCM_WAIT_TIME_AFTER_CHILL_MODE_EXIT_DEFAULT = "5m";
+      HDDS_SCM_WAIT_TIME_AFTER_SAFE_MODE_EXIT_DEFAULT = "5m";
 
-  public static final String HDDS_SCM_CHILLMODE_PIPELINE_AVAILABILITY_CHECK =
-      "hdds.scm.chillmode.pipeline-availability.check";
+  public static final String HDDS_SCM_SAFEMODE_PIPELINE_AVAILABILITY_CHECK =
+      "hdds.scm.safemode.pipeline-availability.check";
   public static final boolean
-      HDDS_SCM_CHILLMODE_PIPELINE_AVAILABILITY_CHECK_DEFAULT = false;
+      HDDS_SCM_SAFEMODE_PIPELINE_AVAILABILITY_CHECK_DEFAULT = false;
 
   // % of containers which should have at least one reported replica
-  // before SCM comes out of chill mode.
-  public static final String HDDS_SCM_CHILLMODE_THRESHOLD_PCT =
-      "hdds.scm.chillmode.threshold.pct";
-  public static final double HDDS_SCM_CHILLMODE_THRESHOLD_PCT_DEFAULT = 0.99;
+  // before SCM comes out of safe mode.
+  public static final String HDDS_SCM_SAFEMODE_THRESHOLD_PCT =
+      "hdds.scm.safemode.threshold.pct";
+  public static final double HDDS_SCM_SAFEMODE_THRESHOLD_PCT_DEFAULT = 0.99;
 
 
   // percentage of healthy pipelines, where all 3 datanodes are reported in the
   // pipeline.
-  public static final String HDDS_SCM_CHILLMODE_HEALTHY_PIPELINE_THRESHOLD_PCT =
-      "hdds.scm.chillmode.healthy.pipelie.pct";
+  public static final String HDDS_SCM_SAFEMODE_HEALTHY_PIPELINE_THRESHOLD_PCT =
+      "hdds.scm.safemode.healthy.pipelie.pct";
   public static final double
-      HDDS_SCM_CHILLMODE_HEALTHY_PIPELINE_THRESHOLD_PCT_DEFAULT = 0.10;
+      HDDS_SCM_SAFEMODE_HEALTHY_PIPELINE_THRESHOLD_PCT_DEFAULT = 0.10;
 
-  public static final String HDDS_SCM_CHILLMODE_ONE_NODE_REPORTED_PIPELINE_PCT =
-      "hdds.scm.chillmode.atleast.one.node.reported.pipeline.pct";
+  public static final String HDDS_SCM_SAFEMODE_ONE_NODE_REPORTED_PIPELINE_PCT =
+      "hdds.scm.safemode.atleast.one.node.reported.pipeline.pct";
   public static final double
-      HDDS_SCM_CHILLMODE_ONE_NODE_REPORTED_PIPELINE_PCT_DEFAULT = 0.90;
+      HDDS_SCM_SAFEMODE_ONE_NODE_REPORTED_PIPELINE_PCT_DEFAULT = 0.90;
 
   public static final String HDDS_LOCK_MAX_CONCURRENCY =
       "hdds.lock.max.concurrency";
@@ -179,34 +176,18 @@ public final class HddsConfigKeys {
   private HddsConfigKeys() {
   }
 
+  // Enable TLS for GRPC clients/server in ozone.
   public static final String HDDS_GRPC_TLS_ENABLED = "hdds.grpc.tls.enabled";
   public static final boolean HDDS_GRPC_TLS_ENABLED_DEFAULT = false;
 
-  public static final String HDDS_GRPC_MUTUAL_TLS_REQUIRED =
-      "hdds.grpc.mutual.tls.required";
-  public static final boolean HDDS_GRPC_MUTUAL_TLS_REQUIRED_DEFAULT = false;
-
+  // Choose TLS provider the default is set to OPENSSL for better performance.
   public static final String HDDS_GRPC_TLS_PROVIDER = "hdds.grpc.tls.provider";
   public static final String HDDS_GRPC_TLS_PROVIDER_DEFAULT = "OPENSSL";
 
-  public static final String HDDS_TRUST_STORE_FILE_NAME =
-      "hdds.trust.cert.collection.file.name";
-  public static final String HDDS_TRUST_STORE_FILE_NAME_DEFAULT = "ca.crt";
-
-  public static final String
-      HDDS_SERVER_CERTIFICATE_CHAIN_FILE_NAME =
-      "hdds.server.cert.chain.file.name";
-  public static final String
-      HDDS_SERVER_CERTIFICATE_CHAIN_FILE_NAME_DEFAULT = "server.crt";
-
-  public static final String
-      HDDS_CLIENT_CERTIFICATE_CHAIN_FILE_NAME =
-      "hdds.client.cert.chain.file.name";
-  public static final String
-      HDDS_CLIENT_CERTIFICATE_CHAIN_FILE_NAME_DEFAULT = "client.crt";
-
+  // Test only settings for using test signed certificate, authority assume to
+  // be localhost.
   public static final String HDDS_GRPC_TLS_TEST_CERT = "hdds.grpc.tls" +
-      ".test_cert";
+      ".test.cert";
   public static final boolean HDDS_GRPC_TLS_TEST_CERT_DEFAULT = false;
 
   // Comma separated acls (users, groups) allowing clients accessing
@@ -237,6 +218,16 @@ public final class HddsConfigKeys {
   // hadoop-policy.xml, "*" allows all users/groups to access.
   public static final String HDDS_SECURITY_CLIENT_SCM_CERTIFICATE_PROTOCOL_ACL =
       "hdds.security.client.scm.certificate.protocol.acl";
+
+  // Determines if the Container Chunk Manager will write user data to disk
+  // Set to false only for specific performance tests
+  public static final String HDDS_CONTAINER_PERSISTDATA =
+      "hdds.container.chunk.persistdata";
+  public static final boolean HDDS_CONTAINER_PERSISTDATA_DEFAULT = true;
+
+  public static final String HDDS_CONTAINER_SCRUB_ENABLED =
+      "hdds.container.scrub.enabled";
+  public static final boolean HDDS_CONTAINER_SCRUB_ENABLED_DEFAULT = false;
 
   public static final String HDDS_DATANODE_HTTP_ENABLED_KEY =
       "hdds.datanode.http.enabled";

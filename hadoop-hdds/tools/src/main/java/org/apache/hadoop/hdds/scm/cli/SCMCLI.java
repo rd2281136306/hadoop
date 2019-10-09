@@ -27,13 +27,8 @@ import org.apache.hadoop.hdds.cli.HddsVersionProvider;
 import org.apache.hadoop.hdds.conf.OzoneConfiguration;
 import org.apache.hadoop.hdds.scm.ScmConfigKeys;
 import org.apache.hadoop.hdds.scm.XceiverClientManager;
-import org.apache.hadoop.hdds.scm.cli.container.CloseSubcommand;
-import org.apache.hadoop.hdds.scm.cli.container.CreateSubcommand;
-import org.apache.hadoop.hdds.scm.cli.container.DeleteSubcommand;
-import org.apache.hadoop.hdds.scm.cli.container.InfoSubcommand;
-import org.apache.hadoop.hdds.scm.cli.container.ListSubcommand;
-import org.apache.hadoop.hdds.scm.cli.pipeline.ClosePipelineSubcommand;
-import org.apache.hadoop.hdds.scm.cli.pipeline.ListPipelinesSubcommand;
+import org.apache.hadoop.hdds.scm.cli.container.ContainerCommands;
+import org.apache.hadoop.hdds.scm.cli.pipeline.PipelineCommands;
 import org.apache.hadoop.hdds.scm.client.ContainerOperationClient;
 import org.apache.hadoop.hdds.scm.client.ScmClient;
 import org.apache.hadoop.hdds.scm.container.ContainerInfo;
@@ -77,14 +72,11 @@ import picocli.CommandLine.Option;
         + "operations.",
     versionProvider = HddsVersionProvider.class,
     subcommands = {
-        ChillModeCommands.class,
-        ListSubcommand.class,
-        InfoSubcommand.class,
-        DeleteSubcommand.class,
-        CreateSubcommand.class,
-        CloseSubcommand.class,
-        ListPipelinesSubcommand.class,
-        ClosePipelineSubcommand.class
+        SafeModeCommands.class,
+        ContainerCommands.class,
+        PipelineCommands.class,
+        TopologySubcommand.class,
+        ReplicationManagerCommands.class
     },
     mixinStandardHelpOptions = true)
 public class SCMCLI extends GenericCli {
@@ -143,7 +135,7 @@ public class SCMCLI extends GenericCli {
                 scmAddress, UserGroupInformation.getCurrentUser(), ozoneConf,
                 NetUtils.getDefaultSocketFactory(ozoneConf),
                 Client.getRpcTimeout(ozoneConf))),
-            StorageContainerLocationProtocol.class);
+            StorageContainerLocationProtocol.class, ozoneConf);
     return new ContainerOperationClient(
         client, new XceiverClientManager(ozoneConf));
   }

@@ -502,19 +502,16 @@ public abstract class AbstractCSQueue implements CSQueue {
       Resource maxResource = conf.getMaximumResourceRequirement(label,
           queuePath, resourceTypes);
 
-      if (LOG.isDebugEnabled()) {
-        LOG.debug("capacityConfigType is '" + capacityConfigType
-            + "' for queue '" + getQueueName());
-      }
+      LOG.debug("capacityConfigType is '{}' for queue {}",
+          capacityConfigType, getQueueName());
+
       if (this.capacityConfigType.equals(CapacityConfigType.NONE)) {
         this.capacityConfigType = (!minResource.equals(Resources.none())
             && queueCapacities.getAbsoluteCapacity(label) == 0f)
                 ? CapacityConfigType.ABSOLUTE_RESOURCE
                 : CapacityConfigType.PERCENTAGE;
-        if (LOG.isDebugEnabled()) {
-          LOG.debug("capacityConfigType is updated as '" + capacityConfigType
-              + "' for queue '" + getQueueName());
-        }
+        LOG.debug("capacityConfigType is updated as '{}' for queue {}",
+            capacityConfigType, getQueueName());
       }
 
       validateAbsoluteVsPercentageCapacityConfig(minResource);
@@ -551,11 +548,9 @@ public abstract class AbstractCSQueue implements CSQueue {
         }
       }
 
-      if (LOG.isDebugEnabled()) {
-        LOG.debug("Updating absolute resource configuration for queue:"
-            + getQueueName() + " as minResource=" + minResource
-            + " and maxResource=" + maxResource);
-      }
+      LOG.debug("Updating absolute resource configuration for queue:{} as"
+          + " minResource={} and maxResource={}", getQueueName(), minResource,
+          maxResource);
 
       queueResourceQuotas.setConfiguredMinResource(label, minResource);
       queueResourceQuotas.setConfiguredMaxResource(label, maxResource);
@@ -634,8 +629,8 @@ public abstract class AbstractCSQueue implements CSQueue {
             && parentState != QueueState.RUNNING) {
           throw new IllegalArgumentException(
               "The parent queue:" + parent.getQueueName()
-              + " state is STOPPED, child queue:" + queueName
-              + " state cannot be RUNNING.");
+              + " cannot be STOPPED as the child queue:" + queueName
+              + " is in RUNNING state.");
         } else {
           updateQueueState(configuredState);
         }

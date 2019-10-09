@@ -42,7 +42,6 @@ import org.slf4j.LoggerFactory;
 import javax.security.auth.login.AppConfigurationEntry;
 import java.io.File;
 import java.io.IOException;
-import java.lang.reflect.InvocationTargetException;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -927,7 +926,7 @@ public class RegistrySecurity extends AbstractService {
       UserGroupInformation realUser = currentUser.getRealUser();
       LOG.info("Real User = {}" , realUser);
     } catch (IOException e) {
-      LOG.warn("Failed to get current user {}, {}", e);
+      LOG.warn("Failed to get current user, {}", e);
     }
   }
 
@@ -1039,19 +1038,11 @@ public class RegistrySecurity extends AbstractService {
    * could be determined
    */
   public static String getDefaultRealmInJVM() {
-    try {
-      return KerberosUtil.getDefaultRealm();
-      // JDK7
-    } catch (ClassNotFoundException ignored) {
-      // ignored
-    } catch (NoSuchMethodException ignored) {
-      // ignored
-    } catch (IllegalAccessException ignored) {
-      // ignored
-    } catch (InvocationTargetException ignored) {
-      // ignored
+    String realm = KerberosUtil.getDefaultRealmProtected();
+    if (realm == null) {
+      realm = "";
     }
-    return "";
+    return realm;
   }
 
   /**

@@ -18,31 +18,30 @@
 
 package org.apache.hadoop.ozone;
 
+import java.io.Closeable;
+import java.io.IOException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdds.conf.OzoneConfiguration;
+import org.apache.hadoop.hdds.protocol.DatanodeDetails;
+import org.apache.hadoop.hdds.ratis.RatisHelper;
 import org.apache.hadoop.hdds.scm.client.HddsClientUtils;
 import org.apache.hadoop.hdds.scm.pipeline.Pipeline;
 import org.apache.hadoop.ozone.client.protocol.ClientProtocol;
 import org.apache.hadoop.ozone.client.rpc.RpcClient;
-import org.apache.hadoop.hdds.protocol.DatanodeDetails;
-import org.apache.hadoop.ozone.client.rest.OzoneException;
-import org.apache.ratis.RatisHelper;
+
+import static org.apache.hadoop.hdds.HddsConfigKeys.HDDS_CONTAINER_REPORT_INTERVAL;
+import static org.apache.hadoop.hdds.ratis.RatisHelper.newRaftClient;
+import static org.apache.hadoop.hdds.scm.ScmConfigKeys.OZONE_SCM_STALENODE_INTERVAL;
 import org.apache.ratis.client.RaftClient;
 import org.apache.ratis.protocol.RaftPeer;
 import org.apache.ratis.rpc.RpcType;
 import org.apache.ratis.rpc.SupportedRpcType;
+import org.apache.ratis.util.TimeDuration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-import java.io.Closeable;
-import java.io.IOException;
-import java.net.URISyntaxException;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
-
-import static org.apache.hadoop.hdds.HddsConfigKeys.HDDS_CONTAINER_REPORT_INTERVAL;
-import static org.apache.hadoop.hdds.scm.ScmConfigKeys.OZONE_SCM_STALENODE_INTERVAL;
-import static org.apache.ratis.RatisHelper.newRaftClient;
 
 /**
  * Helpers for Ratis tests.
@@ -79,8 +78,8 @@ public interface RatisTestHelper {
     }
 
     public ClientProtocol newOzoneClient()
-        throws OzoneException, URISyntaxException, IOException {
-      return new RpcClient(conf);
+        throws IOException {
+      return new RpcClient(conf, null);
     }
 
     @Override
@@ -126,9 +125,11 @@ public interface RatisTestHelper {
     final OzoneConfiguration conf = new OzoneConfiguration();
     final int maxOutstandingRequests =
         HddsClientUtils.getMaxOutstandingRequests(conf);
+    final TimeDuration requestTimeout =
+        RatisHelper.getClientRequestTimeout(conf);
     final RaftClient client =
         newRaftClient(rpc, p, RatisHelper.createRetryPolicy(conf),
-            maxOutstandingRequests);
+            maxOutstandingRequests, requestTimeout);
     client.groupAdd(RatisHelper.newRaftGroup(pipeline), p.getId());
   }
 }

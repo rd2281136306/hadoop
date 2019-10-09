@@ -117,6 +117,8 @@ public class TestZKConfigurationStore extends ConfigurationStoreBaseTest {
     confStore.initialize(conf, schedConf, rmContext);
     assertEquals("val", confStore.retrieve().get("key"));
 
+    assertNull(confStore.retrieve().get(YarnConfiguration.RM_HOSTNAME));
+
     // Create a new configuration store, and check for old configuration
     confStore = createConfStore();
     schedConf.set("key", "badVal");
@@ -125,6 +127,15 @@ public class TestZKConfigurationStore extends ConfigurationStoreBaseTest {
     assertEquals("val", confStore.retrieve().get("key"));
   }
 
+
+  @Test
+  public void testFormatConfiguration() throws Exception {
+    schedConf.set("key", "val");
+    confStore.initialize(conf, schedConf, rmContext);
+    assertEquals("val", confStore.retrieve().get("key"));
+    confStore.format();
+    assertNull(confStore.retrieve());
+  }
 
   @Test
   public void testPersistUpdatedConfiguration() throws Exception {

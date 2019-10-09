@@ -177,6 +177,8 @@ public class RMAppAttemptImpl implements RMAppAttempt, Recoverable {
   private long finishTime = 0;
   private long launchAMStartTime = 0;
   private long launchAMEndTime = 0;
+  private long scheduledTime = 0;
+  private long containerAllocatedTime = 0;
 
   // Set to null initially. Will eventually get set
   // if an RMAppAttemptUnregistrationEvent occurs
@@ -541,10 +543,8 @@ public class RMAppAttemptImpl implements RMAppAttempt, Recoverable {
 
     final int diagnosticsLimitKC = getDiagnosticsLimitKCOrThrow(conf);
 
-    if (LOG.isDebugEnabled()) {
-      LOG.debug(YarnConfiguration.APP_ATTEMPT_DIAGNOSTICS_LIMIT_KC + " : " +
-              diagnosticsLimitKC);
-    }
+    LOG.debug("{} : {}", YarnConfiguration.APP_ATTEMPT_DIAGNOSTICS_LIMIT_KC,
+        diagnosticsLimitKC);
 
     this.diagnostics = new BoundedAppender(diagnosticsLimitKC * 1024);
     this.rmApp = rmApp;
@@ -908,8 +908,8 @@ public class RMAppAttemptImpl implements RMAppAttempt, Recoverable {
 
     try {
       ApplicationAttemptId appAttemptID = event.getApplicationAttemptId();
-      LOG.debug("Processing event for " + appAttemptID + " of type "
-          + event.getType());
+      LOG.debug("Processing event for {} of type {}",
+          appAttemptID, event.getType());
       final RMAppAttemptState oldState = getAppAttemptState();
       try {
         /* keep the master in sync with the state machine */
@@ -1104,18 +1104,15 @@ public class RMAppAttemptImpl implements RMAppAttempt, Recoverable {
         int numNodes =
             RMServerUtils.getApplicableNodeCountForAM(appAttempt.rmContext,
                 appAttempt.conf, appAttempt.amReqs);
-        if (LOG.isDebugEnabled()) {
-          LOG.debug("Setting node count for blacklist to " + numNodes);
-        }
+        LOG.debug("Setting node count for blacklist to {}", numNodes);
         appAttempt.getAMBlacklistManager().refreshNodeHostCount(numNodes);
 
         ResourceBlacklistRequest amBlacklist =
             appAttempt.getAMBlacklistManager().getBlacklistUpdates();
-        if (LOG.isDebugEnabled()) {
-          LOG.debug("Using blacklist for AM: additions(" +
-              amBlacklist.getBlacklistAdditions() + ") and removals(" +
-              amBlacklist.getBlacklistRemovals() + ")");
-        }
+
+        LOG.debug("Using blacklist for AM: additions({}) and removals({})",
+            amBlacklist.getBlacklistAdditions(),
+            amBlacklist.getBlacklistRemovals());
 
         QueueInfo queueInfo = null;
         for (ResourceRequest amReq : appAttempt.amReqs) {
@@ -1148,10 +1145,8 @@ public class RMAppAttemptImpl implements RMAppAttempt, Recoverable {
 
             String labelExp = RMNodeLabelsManager.NO_LABEL;
             if (queueInfo != null) {
-              if (LOG.isDebugEnabled()) {
-                LOG.debug("Setting default node label expression : " + queueInfo
-                    .getDefaultNodeLabelExpression());
-              }
+              LOG.debug("Setting default node label expression : {}",
+                  queueInfo.getDefaultNodeLabelExpression());
               labelExp = queueInfo.getDefaultNodeLabelExpression();
             }
 
@@ -1171,6 +1166,7 @@ public class RMAppAttemptImpl implements RMAppAttempt, Recoverable {
             && amContainerAllocation.getContainers() != null) {
           assert (amContainerAllocation.getContainers().size() == 0);
         }
+        appAttempt.scheduledTime = System.currentTimeMillis();
         return RMAppAttemptState.SCHEDULED;
       } else {
         // save state and then go to LAUNCHED state
@@ -1227,6 +1223,11 @@ public class RMAppAttemptImpl implements RMAppAttempt, Recoverable {
         .clearNodeSetForAttempt(appAttempt.applicationAttemptId);
       appAttempt.getSubmissionContext().setResource(
         appAttempt.getMasterContainer().getResource());
+      appAttempt.containerAllocatedTime = System.currentTimeMillis();
+      long allocationDelay =
+          appAttempt.containerAllocatedTime - appAttempt.scheduledTime;
+      ClusterMetrics.getMetrics().addAMContainerAllocationDelay(
+          allocationDelay);
       appAttempt.storeAttempt();
       return RMAppAttemptState.ALLOCATED_SAVING;
     }
@@ -1509,7 +1510,8 @@ public class RMAppAttemptImpl implements RMAppAttempt, Recoverable {
               && !appAttempt.submissionContext.getUnmanagedAM()) {
             int numberOfFailure = ((RMAppImpl)appAttempt.rmApp)
                 .getNumFailedAppAttempts();
-            if (numberOfFailure < appAttempt.rmApp.getMaxAppAttempts()) {
+            if (appAttempt.rmApp.getMaxAppAttempts() > 1
+                && numberOfFailure < appAttempt.rmApp.getMaxAppAttempts()) {
               keepContainersAcrossAppAttempts = true;
             }
           }

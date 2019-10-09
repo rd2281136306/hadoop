@@ -34,6 +34,14 @@ import java.util.Set;
  */
 public interface ContainerManager extends Closeable {
 
+
+  /**
+   * Returns all the container Ids managed by ContainerManager.
+   *
+   * @return Set of ContainerID
+   */
+  Set<ContainerID> getContainerIDs();
+
   /**
    * Returns all the containers managed by ContainerManager.
    *
@@ -47,6 +55,14 @@ public interface ContainerManager extends Closeable {
    * @return List of ContainerInfo
    */
   List<ContainerInfo> getContainers(HddsProtos.LifeCycleState state);
+
+  /**
+   * Returns number of containers in the given,
+   *  {@link org.apache.hadoop.hdds.protocol.proto.HddsProtos.LifeCycleState}.
+   *
+   * @return Number of containers
+   */
+  Integer getContainerCountByState(HddsProtos.LifeCycleState state);
 
   /**
    * Returns the ContainerInfo from the container ID.
@@ -163,4 +179,12 @@ public interface ContainerManager extends Closeable {
    */
   ContainerInfo getMatchingContainer(long size, String owner,
       Pipeline pipeline, List<ContainerID> excludedContainerIDS);
+
+  /**
+   * Once after report processor handler completes, call this to notify
+   * container manager to increment metrics.
+   * @param isFullReport
+   * @param success
+   */
+  void notifyContainerReportProcessing(boolean isFullReport, boolean success);
 }

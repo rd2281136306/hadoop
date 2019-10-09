@@ -21,6 +21,7 @@ package org.apache.hadoop.ozone.container.common.transport.server;
 import com.google.common.base.Preconditions;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdds.protocol.DatanodeDetails;
+import org.apache.hadoop.hdds.protocol.DatanodeDetails.Port.Name;
 import org.apache.hadoop.hdds.protocol.datanode.proto.ContainerProtos;
 import org.apache.hadoop.hdds.protocol.datanode.proto.ContainerProtos
     .ContainerCommandRequestProto;
@@ -30,6 +31,7 @@ import org.apache.hadoop.hdds.protocol.proto
 import org.apache.hadoop.hdds.scm.pipeline.PipelineID;
 import org.apache.hadoop.hdds.scm.container.common.helpers.
     StorageContainerException;
+import org.apache.hadoop.hdds.security.x509.certificate.client.CertificateClient;
 import org.apache.hadoop.hdds.tracing.GrpcServerInterceptor;
 import org.apache.hadoop.hdds.tracing.TracingUtil;
 import org.apache.hadoop.ozone.OzoneConfigKeys;
@@ -43,19 +45,15 @@ import org.apache.ratis.thirdparty.io.grpc.ServerBuilder;
 import org.apache.ratis.thirdparty.io.grpc.ServerInterceptors;
 import org.apache.ratis.thirdparty.io.grpc.netty.GrpcSslContexts;
 import org.apache.ratis.thirdparty.io.grpc.netty.NettyServerBuilder;
-import org.apache.ratis.thirdparty.io.netty.handler.ssl.ClientAuth;
 import org.apache.ratis.thirdparty.io.netty.handler.ssl.SslContextBuilder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.File;
 import java.io.IOException;
-import java.net.InetSocketAddress;
-import java.net.ServerSocket;
-import java.net.SocketAddress;
 import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Creates a Grpc server endpoint that acts as the communication layer for
@@ -64,10 +62,14 @@ import java.util.UUID;
 public final class XceiverServerGrpc extends XceiverServer {
   private static final Logger
       LOG = LoggerFactory.getLogger(XceiverServerGrpc.class);
+  private static final String COMPONENT = "dn";
   private int port;
   private UUID id;
   private Server server;
   private final ContainerDispatcher storageContainer;
+  private boolean isStarted;
+  private DatanodeDetails datanodeDetails;
+
 
   /**
    * Constructs a Grpc server class.
@@ -75,30 +77,21 @@ public final class XceiverServerGrpc extends XceiverServer {
    * @param conf - Configuration
    */
   public XceiverServerGrpc(DatanodeDetails datanodeDetails, Configuration conf,
-      ContainerDispatcher dispatcher, BindableService... additionalServices) {
-    super(conf);
+      ContainerDispatcher dispatcher, CertificateClient caClient,
+      BindableService... additionalServices) {
+    super(conf, caClient);
     Preconditions.checkNotNull(conf);
 
     this.id = datanodeDetails.getUuid();
+    this.datanodeDetails = datanodeDetails;
     this.port = conf.getInt(OzoneConfigKeys.DFS_CONTAINER_IPC_PORT,
         OzoneConfigKeys.DFS_CONTAINER_IPC_PORT_DEFAULT);
-    // Get an available port on current node and
-    // use that as the container port
+
     if (conf.getBoolean(OzoneConfigKeys.DFS_CONTAINER_IPC_RANDOM_PORT,
         OzoneConfigKeys.DFS_CONTAINER_IPC_RANDOM_PORT_DEFAULT)) {
-      try (ServerSocket socket = new ServerSocket()) {
-        socket.setReuseAddress(true);
-        SocketAddress address = new InetSocketAddress(0);
-        socket.bind(address);
-        this.port = socket.getLocalPort();
-        LOG.info("Found a free port for the server : {}", this.port);
-      } catch (IOException e) {
-        LOG.error("Unable find a random free port for the server, "
-            + "fallback to use default port {}", this.port, e);
-      }
+      this.port = 0;
     }
-    datanodeDetails.setPort(
-        DatanodeDetails.newPort(DatanodeDetails.Port.Name.STANDALONE, port));
+
     NettyServerBuilder nettyServerBuilder =
         ((NettyServerBuilder) ServerBuilder.forPort(port))
             .maxInboundMessageSize(OzoneConsts.OZONE_SCM_CHUNK_MAX_SIZE);
@@ -117,20 +110,9 @@ public final class XceiverServerGrpc extends XceiverServer {
     }
 
     if (getSecConfig().isGrpcTlsEnabled()) {
-      File privateKeyFilePath = getSecurityConfig().getServerPrivateKeyFile();
-      File serverCertChainFilePath =
-          getSecurityConfig().getServerCertChainFile();
-      File clientCertChainFilePath =
-          getSecurityConfig().getClientCertChainFile();
       try {
         SslContextBuilder sslClientContextBuilder = SslContextBuilder.forServer(
-            serverCertChainFilePath, privateKeyFilePath);
-        if (getSecurityConfig().isGrpcMutualTlsRequired() &&
-            clientCertChainFilePath != null) {
-          // Only needed for mutual TLS
-          sslClientContextBuilder.clientAuth(ClientAuth.REQUIRE);
-          sslClientContextBuilder.trustManager(clientCertChainFilePath);
-        }
+            caClient.getPrivateKey(), caClient.getCertificate());
         SslContextBuilder sslContextBuilder = GrpcSslContexts.configure(
             sslClientContextBuilder, getSecurityConfig().getGrpcSslProvider());
         nettyServerBuilder.sslContext(sslContextBuilder.build());
@@ -159,12 +141,36 @@ public final class XceiverServerGrpc extends XceiverServer {
 
   @Override
   public void start() throws IOException {
-    server.start();
+    if (!isStarted) {
+      server.start();
+      int realPort = server.getPort();
+
+      if (port == 0) {
+        LOG.info("{} {} is started using port {}", getClass().getSimpleName(),
+            this.id, realPort);
+        port = realPort;
+      }
+
+      //register the real port to the datanode details.
+      datanodeDetails.setPort(DatanodeDetails
+          .newPort(Name.STANDALONE,
+              realPort));
+
+      isStarted = true;
+    }
   }
 
   @Override
   public void stop() {
-    server.shutdown();
+    if (isStarted) {
+      server.shutdown();
+      try {
+        server.awaitTermination(5, TimeUnit.SECONDS);
+      } catch (Exception e) {
+        LOG.error("failed to shutdown XceiverServerGrpc", e);
+      }
+      isStarted = false;
+    }
   }
 
   @Override

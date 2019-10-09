@@ -133,6 +133,11 @@ public class ZKConfigurationStore extends YarnConfigurationStore {
   }
 
   @Override
+  public void format() throws Exception {
+    zkManager.delete(confStorePath);
+  }
+
+  @Override
   public synchronized void storeVersion() throws Exception {
     byte[] data =
         ((VersionPBImpl) CURRENT_VERSION_INFO).getProto().toByteArray();
@@ -196,7 +201,7 @@ public class ZKConfigurationStore extends YarnConfigurationStore {
     try {
       Map<String, String> map =
           (HashMap<String, String>) deserializeObject(serializedSchedConf);
-      Configuration c = new Configuration();
+      Configuration c = new Configuration(false);
       for (Map.Entry<String, String> e : map.entrySet()) {
         c.set(e.getKey(), e.getValue());
       }

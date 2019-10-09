@@ -19,6 +19,7 @@ package org.apache.hadoop.ozone.om.helpers;
 import com.google.common.annotations.VisibleForTesting;
 import org.apache.hadoop.hdds.protocol.proto.HddsProtos.ReplicationType;
 import org.apache.hadoop.hdds.protocol.proto.HddsProtos.ReplicationFactor;
+import org.apache.hadoop.ozone.OzoneAcl;
 import org.apache.hadoop.ozone.OzoneConsts;
 import org.apache.hadoop.ozone.audit.Auditable;
 
@@ -44,13 +45,17 @@ public final class OmKeyArgs implements Auditable {
   private final String multipartUploadID;
   private final int multipartUploadPartNumber;
   private Map<String, String> metadata;
+  private boolean refreshPipeline;
+  private boolean sortDatanodesInPipeline;
+  private List<OzoneAcl> acls;
 
   @SuppressWarnings("parameternumber")
   private OmKeyArgs(String volumeName, String bucketName, String keyName,
       long dataSize, ReplicationType type, ReplicationFactor factor,
       List<OmKeyLocationInfo> locationInfoList, boolean isMultipart,
       String uploadID, int partNumber,
-      Map<String, String> metadataMap) {
+      Map<String, String> metadataMap, boolean refreshPipeline,
+      List<OzoneAcl> acls, boolean sortDatanode) {
     this.volumeName = volumeName;
     this.bucketName = bucketName;
     this.keyName = keyName;
@@ -62,6 +67,9 @@ public final class OmKeyArgs implements Auditable {
     this.multipartUploadID = uploadID;
     this.multipartUploadPartNumber = partNumber;
     this.metadata = metadataMap;
+    this.refreshPipeline = refreshPipeline;
+    this.acls = acls;
+    this.sortDatanodesInPipeline = sortDatanode;
   }
 
   public boolean getIsMultipartKey() {
@@ -82,6 +90,10 @@ public final class OmKeyArgs implements Auditable {
 
   public ReplicationFactor getFactor() {
     return factor;
+  }
+
+  public List<OzoneAcl> getAcls() {
+    return acls;
   }
 
   public String getVolumeName() {
@@ -118,6 +130,14 @@ public final class OmKeyArgs implements Auditable {
 
   public List<OmKeyLocationInfo> getLocationInfoList() {
     return locationInfoList;
+  }
+
+  public boolean getRefreshPipeline() {
+    return refreshPipeline;
+  }
+
+  public boolean getSortDatanodes() {
+    return sortDatanodesInPipeline;
   }
 
   @Override
@@ -159,6 +179,9 @@ public final class OmKeyArgs implements Auditable {
     private String multipartUploadID;
     private int multipartUploadPartNumber;
     private Map<String, String> metadata = new HashMap<>();
+    private boolean refreshPipeline;
+    private boolean sortDatanodesInPipeline;
+    private List<OzoneAcl> acls;
 
     public Builder setVolumeName(String volume) {
       this.volumeName = volume;
@@ -195,6 +218,11 @@ public final class OmKeyArgs implements Auditable {
       return this;
     }
 
+    public Builder setAcls(List<OzoneAcl> listOfAcls) {
+      this.acls = listOfAcls;
+      return this;
+    }
+
     public Builder setIsMultipartKey(boolean isMultipart) {
       this.isMultipartKey = isMultipart;
       return this;
@@ -220,10 +248,21 @@ public final class OmKeyArgs implements Auditable {
       return this;
     }
 
+    public Builder setRefreshPipeline(boolean refresh) {
+      this.refreshPipeline = refresh;
+      return this;
+    }
+
+    public Builder setSortDatanodesInPipeline(boolean sort) {
+      this.sortDatanodesInPipeline = sort;
+      return this;
+    }
+
     public OmKeyArgs build() {
       return new OmKeyArgs(volumeName, bucketName, keyName, dataSize, type,
           factor, locationInfoList, isMultipartKey, multipartUploadID,
-          multipartUploadPartNumber, metadata);
+          multipartUploadPartNumber, metadata, refreshPipeline, acls,
+          sortDatanodesInPipeline);
     }
 
   }

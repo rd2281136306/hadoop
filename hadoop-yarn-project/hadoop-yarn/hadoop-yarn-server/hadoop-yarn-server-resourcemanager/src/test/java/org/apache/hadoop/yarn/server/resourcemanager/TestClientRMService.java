@@ -18,6 +18,7 @@
 
 package org.apache.hadoop.yarn.server.resourcemanager;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -30,11 +31,15 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.when;
 
+import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.FileWriter;
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.net.UnknownHostException;
 import java.security.AccessControlException;
 import java.security.PrivilegedExceptionAction;
 import java.util.ArrayList;
@@ -54,6 +59,7 @@ import org.apache.commons.io.FileUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.ipc.Server;
 import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.hadoop.yarn.MockApps;
 import org.apache.hadoop.yarn.api.ApplicationClientProtocol;
@@ -196,6 +202,7 @@ public class TestClientRMService {
   
   private final static String QUEUE_1 = "Q-1";
   private final static String QUEUE_2 = "Q-2";
+  private final static String APPLICATION_TAG_SC_PREPROCESSOR ="mytag:foo";
   private File resourceTypesFile = null;
 
   @Test
@@ -974,6 +981,178 @@ public class TestClientRMService {
     Assert.assertEquals(0, applications1.size());
   }
 
+  @Test (timeout = 30000)
+  @SuppressWarnings ("rawtypes")
+  public void testAppSubmitWithSubmissionPreProcessor() throws Exception {
+    ResourceScheduler scheduler = mockResourceScheduler();
+    RMContext rmContext = mock(RMContext.class);
+    mockRMContext(scheduler, rmContext);
+    YarnConfiguration yConf = new YarnConfiguration();
+    yConf.setBoolean(YarnConfiguration.RM_SUBMISSION_PREPROCESSOR_ENABLED,
+        true);
+    yConf.setBoolean(YarnConfiguration.NODE_LABELS_ENABLED, true);
+    // Override the YARN configuration.
+    when(rmContext.getYarnConfiguration()).thenReturn(yConf);
+    RMStateStore stateStore = mock(RMStateStore.class);
+    when(rmContext.getStateStore()).thenReturn(stateStore);
+    RMAppManager appManager = new RMAppManager(rmContext, scheduler,
+        null, mock(ApplicationACLsManager.class), new Configuration());
+    when(rmContext.getDispatcher().getEventHandler()).thenReturn(
+        new EventHandler<Event>() {
+          public void handle(Event event) {}
+        });
+    ApplicationId appId1 = getApplicationId(100);
+    ApplicationACLsManager mockAclsManager = mock(ApplicationACLsManager.class);
+    when(
+        mockAclsManager.checkAccess(UserGroupInformation.getCurrentUser(),
+            ApplicationAccessType.VIEW_APP, null, appId1)).thenReturn(true);
+
+    QueueACLsManager mockQueueACLsManager = mock(QueueACLsManager.class);
+    when(mockQueueACLsManager.checkAccess(any(UserGroupInformation.class),
+        any(QueueACL.class), any(RMApp.class), any(String.class),
+        any()))
+        .thenReturn(true);
+
+    ClientRMService rmService =
+        new ClientRMService(rmContext, scheduler, appManager,
+            mockAclsManager, mockQueueACLsManager, null);
+    File rulesFile = File.createTempFile("submission_rules", ".tmp");
+    rulesFile.deleteOnExit();
+    rulesFile.createNewFile();
+
+    yConf.set(YarnConfiguration.RM_SUBMISSION_PREPROCESSOR_FILE_PATH,
+        rulesFile.getAbsolutePath());
+    rmService.serviceInit(yConf);
+    rmService.serviceStart();
+
+    BufferedWriter writer = new BufferedWriter(new FileWriter(rulesFile));
+    writer.write("host.cluster1.com   NL=foo     Q=bar  TA=cluster:cluster1");
+    writer.newLine();
+    writer.write("host.cluster2.com   Q=hello  NL=zuess   TA=cluster:cluster2");
+    writer.newLine();
+    writer.write("host.cluster.*.com   Q=hello  NL=reg   TA=cluster:reg");
+    writer.newLine();
+    writer.write("host.cluster.*.com   Q=hello  NL=reg   TA=cluster:reg");
+    writer.newLine();
+    writer.write("*   TA=cluster:other    Q=default  NL=barfoo");
+    writer.newLine();
+    writer.write("host.testcluster1.com  Q=default");
+    writer.flush();
+    writer.close();
+    rmService.getContextPreProcessor().refresh();
+    setupCurrentCall("host.cluster1.com");
+    SubmitApplicationRequest submitRequest1 = mockSubmitAppRequest(
+        appId1, null, null);
+    try {
+      rmService.submitApplication(submitRequest1);
+    } catch (YarnException e) {
+      Assert.fail("Exception is not expected.");
+    }
+    RMApp app1 = rmContext.getRMApps().get(appId1);
+    Assert.assertNotNull("app doesn't exist", app1);
+    Assert.assertEquals("app name doesn't match",
+        YarnConfiguration.DEFAULT_APPLICATION_NAME, app1.getName());
+    Assert.assertTrue("custom tag not present",
+        app1.getApplicationTags().contains("cluster:cluster1"));
+    Assert.assertEquals("app queue doesn't match", "bar", app1.getQueue());
+    Assert.assertEquals("app node label doesn't match",
+        "foo", app1.getApplicationSubmissionContext().getNodeLabelExpression());
+    setupCurrentCall("host.cluster2.com");
+    ApplicationId appId2 = getApplicationId(101);
+    SubmitApplicationRequest submitRequest2 = mockSubmitAppRequest(
+        appId2, null, null);
+    submitRequest2.getApplicationSubmissionContext().setApplicationType(
+        "matchType");
+    Set<String> aTags = new HashSet<String>();
+    aTags.add(APPLICATION_TAG_SC_PREPROCESSOR);
+    submitRequest2.getApplicationSubmissionContext().setApplicationTags(aTags);
+    try {
+      rmService.submitApplication(submitRequest2);
+    } catch (YarnException e) {
+      Assert.fail("Exception is not expected.");
+    }
+    RMApp app2 = rmContext.getRMApps().get(appId2);
+    Assert.assertNotNull("app doesn't exist", app2);
+    Assert.assertEquals("app name doesn't match",
+        YarnConfiguration.DEFAULT_APPLICATION_NAME, app2.getName());
+    Assert.assertTrue("client tag not present",
+        app2.getApplicationTags().contains(APPLICATION_TAG_SC_PREPROCESSOR));
+    Assert.assertTrue("custom tag not present",
+        app2.getApplicationTags().contains("cluster:cluster2"));
+    Assert.assertEquals("app queue doesn't match", "hello", app2.getQueue());
+    Assert.assertEquals("app node label doesn't match",
+        "zuess",
+        app2.getApplicationSubmissionContext().getNodeLabelExpression());
+    // Test Default commands
+    setupCurrentCall("host2.cluster3.com");
+    ApplicationId appId3 = getApplicationId(102);
+    SubmitApplicationRequest submitRequest3 = mockSubmitAppRequest(
+        appId3, null, null);
+    submitRequest3.getApplicationSubmissionContext().setApplicationType(
+        "matchType");
+    submitRequest3.getApplicationSubmissionContext().setApplicationTags(aTags);
+    try {
+      rmService.submitApplication(submitRequest3);
+    } catch (YarnException e) {
+      Assert.fail("Exception is not expected.");
+    }
+    RMApp app3 = rmContext.getRMApps().get(appId3);
+    Assert.assertNotNull("app doesn't exist", app3);
+    Assert.assertEquals("app name doesn't match",
+        YarnConfiguration.DEFAULT_APPLICATION_NAME, app3.getName());
+    Assert.assertTrue("client tag not present",
+        app3.getApplicationTags().contains(APPLICATION_TAG_SC_PREPROCESSOR));
+    Assert.assertTrue("custom tag not present",
+        app3.getApplicationTags().contains("cluster:other"));
+    Assert.assertEquals("app queue doesn't match", "default", app3.getQueue());
+    Assert.assertEquals("app node label doesn't match",
+        "barfoo",
+        app3.getApplicationSubmissionContext().getNodeLabelExpression());
+    // Test regex
+    setupCurrentCall("host.cluster100.com");
+    ApplicationId appId4 = getApplicationId(103);
+    SubmitApplicationRequest submitRequest4 = mockSubmitAppRequest(
+        appId4, null, null);
+    try {
+      rmService.submitApplication(submitRequest4);
+    } catch (YarnException e) {
+      Assert.fail("Exception is not expected.");
+    }
+    RMApp app4 = rmContext.getRMApps().get(appId4);
+    Assert.assertTrue("custom tag not present",
+        app4.getApplicationTags().contains("cluster:reg"));
+    Assert.assertEquals("app node label doesn't match",
+        "reg", app4.getApplicationSubmissionContext().getNodeLabelExpression());
+    testSubmissionContextWithAbsentTAG(rmService, rmContext);
+    rmService.serviceStop();
+  }
+
+  private void testSubmissionContextWithAbsentTAG(ClientRMService rmService,
+      RMContext rmContext) throws Exception {
+    setupCurrentCall("host.testcluster1.com");
+    ApplicationId appId5 = getApplicationId(104);
+    SubmitApplicationRequest submitRequest5 = mockSubmitAppRequest(
+        appId5, null, null);
+    try {
+      rmService.submitApplication(submitRequest5);
+    } catch (YarnException e) {
+      Assert.fail("Exception is not expected.");
+    }
+    RMApp app5 = rmContext.getRMApps().get(appId5);
+    Assert.assertEquals("custom tag  present",
+        app5.getApplicationTags().size(), 0);
+    Assert.assertNull("app node label present",
+        app5.getApplicationSubmissionContext().getNodeLabelExpression());
+    Assert.assertEquals("Queue name is not present",
+        app5.getQueue(), "default");
+  }
+  private void setupCurrentCall(String hostName) throws UnknownHostException {
+    Server.Call mockCall = mock(Server.Call.class);
+    when(mockCall.getHostInetAddress()).thenReturn(
+                InetAddress.getByAddress(hostName,
+                        new byte[]{123, 123, 123, 123}));
+    Server.getCurCall().set(mockCall);
+  }
   
   @Test (timeout = 30000)
   @SuppressWarnings ("rawtypes")
@@ -1788,7 +1967,7 @@ public class TestClientRMService {
 
     // Ensure all reservations are filtered out.
     Assert.assertNotNull(response);
-    Assert.assertEquals(response.getReservationAllocationState().size(), 0);
+    assertThat(response.getReservationAllocationState()).isEmpty();
 
     duration = 30000;
     deadline = sRequest.getReservationDefinition().getDeadline();
@@ -1808,7 +1987,7 @@ public class TestClientRMService {
 
     // Ensure all reservations are filtered out.
     Assert.assertNotNull(response);
-    Assert.assertEquals(response.getReservationAllocationState().size(), 0);
+    assertThat(response.getReservationAllocationState()).isEmpty();
 
     arrival = clock.getTime();
     // List reservations, search by end time before the reservation start
@@ -1826,7 +2005,7 @@ public class TestClientRMService {
 
     // Ensure all reservations are filtered out.
     Assert.assertNotNull(response);
-    Assert.assertEquals(response.getReservationAllocationState().size(), 0);
+    assertThat(response.getReservationAllocationState()).isEmpty();
 
     // List reservations, search by very small end time.
     request = ReservationListRequest
@@ -1841,7 +2020,7 @@ public class TestClientRMService {
 
     // Ensure all reservations are filtered out.
     Assert.assertNotNull(response);
-    Assert.assertEquals(response.getReservationAllocationState().size(), 0);
+    assertThat(response.getReservationAllocationState()).isEmpty();
 
     rm.stop();
   }
@@ -2012,7 +2191,7 @@ public class TestClientRMService {
         Arrays.asList(node1A)));
     Assert.assertTrue(labelsToNodes.get(labelZ.getName()).containsAll(
         Arrays.asList(node1B, node3B)));
-    Assert.assertEquals(labelsToNodes.get(labelY.getName()), null);
+    assertThat(labelsToNodes.get(labelY.getName())).isNull();
 
     rpc.stopProxy(client, conf);
     rm.close();
@@ -2113,10 +2292,10 @@ public class TestClientRMService {
         client.getAttributesToNodes(request);
     Map<NodeAttributeKey, List<NodeToAttributeValue>> attrs =
         response.getAttributesToNodes();
-    Assert.assertEquals(response.getAttributesToNodes().size(), 4);
-    Assert.assertEquals(attrs.get(dist.getAttributeKey()).size(), 2);
-    Assert.assertEquals(attrs.get(os.getAttributeKey()).size(), 1);
-    Assert.assertEquals(attrs.get(gpu.getAttributeKey()).size(), 1);
+    assertThat(response.getAttributesToNodes()).hasSize(4);
+    assertThat(attrs.get(dist.getAttributeKey())).hasSize(2);
+    assertThat(attrs.get(os.getAttributeKey())).hasSize(1);
+    assertThat(attrs.get(gpu.getAttributeKey())).hasSize(1);
     Assert.assertTrue(findHostnameAndValInMapping(node1, "3_0_2",
         attrs.get(dist.getAttributeKey())));
     Assert.assertTrue(findHostnameAndValInMapping(node2, "3_0_2",
@@ -2130,7 +2309,7 @@ public class TestClientRMService {
         client.getAttributesToNodes(request2);
     Map<NodeAttributeKey, List<NodeToAttributeValue>> attrs2 =
         response2.getAttributesToNodes();
-    Assert.assertEquals(attrs2.size(), 1);
+    assertThat(attrs2).hasSize(1);
     Assert.assertTrue(findHostnameAndValInMapping(node2, "docker0",
         attrs2.get(docker.getAttributeKey())));
 
@@ -2141,7 +2320,7 @@ public class TestClientRMService {
         client.getAttributesToNodes(request3);
     Map<NodeAttributeKey, List<NodeToAttributeValue>> attrs3 =
         response3.getAttributesToNodes();
-    Assert.assertEquals(attrs3.size(), 2);
+    assertThat(attrs3).hasSize(2);
     Assert.assertTrue(findHostnameAndValInMapping(node1, "windows64",
         attrs3.get(os.getAttributeKey())));
     Assert.assertTrue(findHostnameAndValInMapping(node2, "docker0",

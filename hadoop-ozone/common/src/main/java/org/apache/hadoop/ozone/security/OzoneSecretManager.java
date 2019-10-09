@@ -36,8 +36,6 @@ import java.security.NoSuchAlgorithmException;
 import java.security.PrivateKey;
 import java.security.Signature;
 import java.security.SignatureException;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -62,8 +60,6 @@ public abstract class OzoneSecretManager<T extends TokenIdentifier>
   private OzoneSecretKey currentKey;
   private AtomicInteger currentKeyId;
   private AtomicInteger tokenSequenceNumber;
-  @SuppressWarnings("visibilitymodifier")
-  protected final Map<Integer, OzoneSecretKey> allKeys;
 
   /**
    * Create a secret manager.
@@ -74,6 +70,7 @@ public abstract class OzoneSecretManager<T extends TokenIdentifier>
    * @param tokenRenewInterval how often the tokens must be renewed in
    * milliseconds
    * @param service name of service
+   * @param logger logger for the secret manager
    */
   public OzoneSecretManager(SecurityConfig secureConf, long tokenMaxLifetime,
       long tokenRenewInterval, Text service, Logger logger) {
@@ -82,7 +79,6 @@ public abstract class OzoneSecretManager<T extends TokenIdentifier>
     this.tokenRenewInterval = tokenRenewInterval;
     currentKeyId = new AtomicInteger();
     tokenSequenceNumber = new AtomicInteger();
-    allKeys = new ConcurrentHashMap<>();
     this.service = service;
     this.logger = logger;
   }
@@ -193,7 +189,7 @@ public abstract class OzoneSecretManager<T extends TokenIdentifier>
   public synchronized void start(CertificateClient client)
       throws IOException {
     Preconditions.checkState(!isRunning());
-    this.certClient = client;
+    setCertClient(client);
     updateCurrentKey(new KeyPair(certClient.getPublicKey(),
         certClient.getPrivateKey()));
     setIsRunning(true);
@@ -251,6 +247,10 @@ public abstract class OzoneSecretManager<T extends TokenIdentifier>
 
   public CertificateClient getCertClient() {
     return certClient;
+  }
+
+  public void setCertClient(CertificateClient client) {
+    this.certClient = client;
   }
 }
 
